@@ -26,17 +26,20 @@ const Welcome: React.FC = () => {
 
   return (
     <div
+      className="brand-gradient"
       style={{
         width: '100%',
-        height: '100vh',
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        padding: 40
+        padding: 40,
+        position: 'relative',
+        overflow: 'hidden',
       }}
     >
+      <div className="titlebar-drag" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 40 }} />
       <div style={{ textAlign: 'center', marginBottom: 60 }}>
         <Title
           level={1}

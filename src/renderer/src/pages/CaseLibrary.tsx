@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Layout,
   Input,
   Tree,
   Tag,
@@ -10,7 +9,6 @@ import {
   Statistic,
   Row,
   Col,
-  Dropdown,
   Typography,
   message,
   Popconfirm,
@@ -26,32 +24,16 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useCasesStore } from '../stores/cases'
-import type { TestCase, CaseStatus } from '../../../shared/types'
+import type { TestCase } from '../../../shared/types'
+import { CASE_STATUS_LABELS, CASE_STATUS_COLORS } from '../../../shared/constants'
 
-const { Sider, Content } = Layout
 const { Text } = Typography
-
-const statusLabels: Record<CaseStatus, string> = {
-  draft: '草稿',
-  ready: '就绪',
-  passed: '通过',
-  failed: '失败',
-  flaky: '不稳定'
-}
-
-const statusColors: Record<CaseStatus, string> = {
-  draft: 'default',
-  ready: 'processing',
-  passed: 'success',
-  failed: 'error',
-  flaky: 'warning'
-}
 
 const CaseLibrary: React.FC = () => {
   const navigate = useNavigate()
-  const { cases, loading, loadCases, deleteCase } = useCasesStore()
+  const { cases, loading, loadCases, deleteCase, startReplay, isReplaying } = useCasesStore()
   const [searchText, setSearchText] = useState('')
-  const [statusFilter, setStatusFilter] = useState<CaseStatus | undefined>()
+  const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [tagFilter, setTagFilter] = useState<string | undefined>()
 
   useEffect(() => {
@@ -68,8 +50,8 @@ const CaseLibrary: React.FC = () => {
     return true
   })
 
-  const passedCount = cases.filter((c) => c.status === 'passed').length
-  const failedCount = cases.filter((c) => c.status === 'failed').length
+  const passedCount = cases.filter((c) => c.status === 'active').length
+  const failedCount = cases.filter((c) => c.status === 'deprecated').length
 
   const treeData = [
     {
@@ -81,6 +63,17 @@ const CaseLibrary: React.FC = () => {
       ]
     }
   ]
+
+  const handleReplay = async (record: TestCase) => {
+    message.loading({ content: '正在启动回放...', key: 'replay', duration: 0 })
+    await startReplay({
+      testCaseId: record.id,
+      type: 'functional',
+      speed: 1,
+      browser: 'chrome',
+    })
+    message.destroy('replay')
+  }
 
   const columns = [
     {
@@ -99,8 +92,10 @@ const CaseLibrary: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: CaseStatus) => (
-        <Tag color={statusColors[status]}>{statusLabels[status]}</Tag>
+      render: (status: string) => (
+        <Tag color={CASE_STATUS_COLORS[status] || 'default'}>
+          {CASE_STATUS_LABELS[status] || status}
+        </Tag>
       )
     },
     {
@@ -112,18 +107,20 @@ const CaseLibrary: React.FC = () => {
         tags.map((tag) => <Tag key={tag}>{tag}</Tag>)
     },
     {
+      title: '步骤数',
+      dataIndex: 'steps',
+      key: 'steps',
+      width: 80,
+      render: (steps: unknown[]) => steps?.length || 0
+    },
+    {
       title: '创建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
       width: 160,
-      render: (ts: number) => new Date(ts).toLocaleString('zh-CN')
-    },
-    {
-      title: '更新时间',
-      dataIndex: 'updatedAt',
-      key: 'updatedAt',
-      width: 160,
-      render: (ts: number) => new Date(ts).toLocaleString('zh-CN')
+      render: (ts: string) => {
+        try { return new Date(ts).toLocaleString('zh-CN') } catch { return ts }
+      }
     },
     {
       title: '操作',
@@ -137,9 +134,15 @@ const CaseLibrary: React.FC = () => {
             icon={<EyeOutlined />}
             onClick={() => navigate(`/manage/case/${record.id}`)}
           >
-            查看详情
+            详情
           </Button>
-          <Button type="link" size="small" icon={<PlayCircleOutlined />}>
+          <Button
+            type="link"
+            size="small"
+            icon={<PlayCircleOutlined />}
+            onClick={() => handleReplay(record)}
+            loading={isReplaying}
+          >
             回放
           </Button>
           <Popconfirm
@@ -159,14 +162,15 @@ const CaseLibrary: React.FC = () => {
   ]
 
   return (
-    <Layout style={{ height: '100%', background: '#fff' }}>
-      <Sider
-        width={260}
+    <div style={{ height: '100%', display: 'flex', background: '#fff', overflow: 'hidden' }}>
+      <div
         style={{
+          width: 240,
           background: '#fafafa',
           borderRight: '1px solid #f0f0f0',
           padding: '16px 12px',
-          overflow: 'auto'
+          overflow: 'auto',
+          flexShrink: 0,
         }}
       >
         <Input
@@ -224,23 +228,23 @@ const CaseLibrary: React.FC = () => {
             </Col>
             <Col span={8}>
               <Statistic
-                title="通过"
+                title="活跃"
                 value={passedCount}
                 valueStyle={{ fontSize: 18, color: '#52c41a' }}
               />
             </Col>
             <Col span={8}>
               <Statistic
-                title="失败"
+                title="弃用"
                 value={failedCount}
                 valueStyle={{ fontSize: 18, color: '#ff4d4f' }}
               />
             </Col>
           </Row>
         </div>
-      </Sider>
+      </div>
 
-      <Content style={{ padding: 24, overflow: 'auto' }}>
+      <div style={{ flex: 1, padding: 24, overflow: 'auto' }}>
         <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
           <Select
             placeholder="状态筛选"
@@ -249,7 +253,7 @@ const CaseLibrary: React.FC = () => {
             value={statusFilter}
             onChange={(val) => setStatusFilter(val)}
           >
-            {Object.entries(statusLabels).map(([key, label]) => (
+            {Object.entries(CASE_STATUS_LABELS).map(([key, label]) => (
               <Select.Option key={key} value={key}>
                 {label}
               </Select.Option>
@@ -277,8 +281,8 @@ const CaseLibrary: React.FC = () => {
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
           size="middle"
         />
-      </Content>
-    </Layout>
+      </div>
+    </div>
   )
 }
 

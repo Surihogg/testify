@@ -9,12 +9,10 @@ import {
   Row,
   Col,
   Statistic,
-  Space,
   Typography,
   message
 } from 'antd'
 import {
-  CheckCircleOutlined,
   WarningOutlined,
   CloseCircleOutlined,
   ApiOutlined,
@@ -23,33 +21,29 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { useRecordingStore } from '../stores/recording'
 import { useCasesStore } from '../stores/cases'
-import type { TestCase, NetworkRequest, ConsoleMessage } from '../../../shared/types'
+import type { TestCase } from '../../../shared/types'
 
 const { TextArea } = Input
 const { Text } = Typography
 
 const RecordDone: React.FC = () => {
   const navigate = useNavigate()
-  const { steps, reset } = useRecordingStore()
+  const { stepCount, errorCount, networkErrorCount, session, reset } = useRecordingStore()
   const { saveCase } = useCasesStore()
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
-
-  const stepCount = steps.length
-  const networkCount = steps.reduce((acc, s) => acc + s.networkRequests.length, 0)
-  const networkErrorCount = steps.reduce(
-    (acc, s) => acc + s.networkRequests.filter((r) => r.status >= 400).length,
-    0
-  )
-  const consoleErrorCount = steps.reduce(
-    (acc, s) => acc + s.consoleMessages.filter((m) => m.level === 'error').length,
-    0
-  )
 
   const handleSave = async () => {
     try {
       const values = await form.validateFields()
       setSaving(true)
+
+      const steps = session?.steps || []
+      if (steps.length === 0 && stepCount > 0) {
+        message.error('录制数据丢失，请重新录制')
+        setSaving(false)
+        return
+      }
       const testCase: TestCase = {
         id: Date.now().toString(),
         name: values.name,
@@ -58,15 +52,27 @@ const RecordDone: React.FC = () => {
         status: 'draft',
         steps,
         assertions: [],
-        networkLogs: steps.reduce<NetworkRequest[]>((acc, s) => [...acc, ...s.networkRequests], []),
-        logs: steps.reduce<ConsoleMessage[]>((acc, s) => [...acc, ...s.consoleMessages], []),
-        createdAt: Date.now(),
-        updatedAt: Date.now()
+        group: 'default',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          browser: session?.config?.browser
+            ? { name: session.config.browser, version: '', channel: session.config.browser }
+            : { name: 'chrome', version: '', channel: 'chrome' },
+          url: session?.config?.startUrl || '',
+          viewport: { width: 1280, height: 720 },
+          recordingDuration: session ? (session.endTime || Date.now()) - session.startTime : 0,
+          userProfile: session?.config?.userProfile || '',
+        },
       }
-      await saveCase(testCase)
-      message.success('用例保存成功')
-      reset()
-      navigate('/manage')
+      const success = await saveCase(testCase)
+      if (success) {
+        message.success('用例保存成功')
+        reset()
+        navigate('/manage')
+      } else {
+        message.error('保存失败')
+      }
     } catch {
       message.warning('请填写用例名称')
     } finally {
@@ -74,17 +80,24 @@ const RecordDone: React.FC = () => {
     }
   }
 
+  const networkCount = session?.networkLogs?.length || 0
+  const networkErrorCountFromSession = session?.networkLogs?.filter((l) => l.failed).length || 0
+  const consoleErrorCountFromSession = session?.errors?.length || 0
+
   return (
     <div
       style={{
         width: '100%',
-        height: '100vh',
-        overflow: 'auto',
+        height: '100%',
         background: '#f5f5f5',
-        padding: '40px 24px'
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
       }}
     >
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <div className="titlebar-drag" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 40, zIndex: 1 }} />
+      <div style={{ maxWidth: 720, margin: '0 auto', width: '100%', flex: 1, overflow: 'auto', padding: '48px 24px 24px' }}>
         <Result
           status="success"
           title="录制完成"
@@ -117,7 +130,7 @@ const RecordDone: React.FC = () => {
             <Col span={6}>
               <Statistic
                 title="接口异常数"
-                value={networkErrorCount}
+                value={networkErrorCountFromSession}
                 prefix={<WarningOutlined />}
                 valueStyle={{ color: '#faad14' }}
               />
@@ -125,7 +138,7 @@ const RecordDone: React.FC = () => {
             <Col span={6}>
               <Statistic
                 title="控制台错误数"
-                value={consoleErrorCount}
+                value={consoleErrorCountFromSession}
                 prefix={<CloseCircleOutlined />}
                 valueStyle={{ color: '#ff4d4f' }}
               />

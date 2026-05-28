@@ -14,11 +14,21 @@ class StorageService {
 
     if (caseData.steps) {
       for (const step of caseData.steps) {
-        if (step.screenshot && step.screenshot.startsWith('data:')) {
-          const screenshotData = step.screenshot.replace(/^data:image\/\w+;base64,/, '')
-          const screenshotPath = path.join('screenshots', `step-${String(step.index).padStart(3, '0')}.png`)
-          await fs.writeFile(path.join(caseDir, screenshotPath), screenshotData, 'base64')
-          step.screenshot = screenshotPath
+        if (step.screenshot) {
+          if (step.screenshot.startsWith('data:')) {
+            const screenshotData = step.screenshot.replace(/^data:image\/\w+;base64,/, '')
+            const screenshotPath = path.join('screenshots', `step-${String(step.index).padStart(3, '0')}.jpg`)
+            await fs.writeFile(path.join(caseDir, screenshotPath), screenshotData, 'base64')
+            step.screenshot = screenshotPath
+          } else if (step.screenshot.startsWith('/')) {
+            const screenshotPath = path.join('screenshots', `step-${String(step.index).padStart(3, '0')}.jpg`)
+            try {
+              await fs.copyFile(step.screenshot, path.join(caseDir, screenshotPath))
+              step.screenshot = screenshotPath
+            } catch {
+              step.screenshot = undefined
+            }
+          }
         }
       }
     }
@@ -55,11 +65,11 @@ class StorageService {
     const testCase: TestCase = JSON.parse(content)
 
     for (const step of testCase.steps) {
-      if (step.screenshot && !step.screenshot.startsWith('data:')) {
+      if (step.screenshot && !step.screenshot.startsWith('data:') && !step.screenshot.startsWith('/')) {
         const screenshotAbsPath = path.join(caseDir, step.screenshot)
         try {
           const data = await fs.readFile(screenshotAbsPath)
-          step.screenshot = `data:image/png;base64,${data.toString('base64')}`
+          step.screenshot = `data:image/jpeg;base64,${data.toString('base64')}`
         } catch {
           step.screenshot = undefined
         }

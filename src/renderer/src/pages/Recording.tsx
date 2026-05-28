@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef, useMemo } from 'react'
 import { Button, Badge, Tag, Space, Typography } from 'antd'
 import {
   PauseCircleOutlined,
@@ -11,42 +11,30 @@ import {
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useRecordingStore } from '../stores/recording'
-import type { Step, StepType } from '../../../shared/types'
+import type { StepType } from '../../../shared/types'
+import { STEP_TYPE_LABELS } from '../../../shared/constants'
 
 const { Text } = Typography
 
-const stepTypeLabels: Record<StepType, string> = {
-  click: '点击',
-  dblclick: '双击',
-  input: '输入',
-  navigate: '导航',
-  scroll: '滚动',
-  select: '选择',
-  hover: '悬停',
-  keypress: '按键',
-  wait: '等待',
-  assert: '断言',
-  screenshot: '截图'
-}
-
-const stepTypeColors: Record<StepType, string> = {
+const stepTypeColors: Record<string, string> = {
   click: '#1890ff',
   dblclick: '#1890ff',
   input: '#52c41a',
   navigate: '#722ed1',
   scroll: '#faad14',
   select: '#13c2c2',
-  hover: '#eb2f96',
   keypress: '#fa8c16',
   wait: '#8c8c8c',
-  assert: '#2f54eb',
-  screenshot: '#a0d911'
+  upload: '#2f54eb',
+  download: '#a0d911',
 }
 
 const Recording: React.FC = () => {
   const navigate = useNavigate()
-  const { isRecording, isPaused, steps, startRecording, pauseRecording, resumeRecording, stopRecording } =
-    useRecordingStore()
+  const {
+    isRecording, isPaused, stepCount, errorCount, networkErrorCount,
+    recentSteps, startRecording, pauseRecording, resumeRecording, stopRecording
+  } = useRecordingStore()
   const [elapsed, setElapsed] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const stepsEndRef = useRef<HTMLDivElement>(null)
@@ -72,9 +60,7 @@ const Recording: React.FC = () => {
 
   useEffect(() => {
     stepsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [steps])
-
-  const errorCount = steps.filter((s) => s.status === 'error' || s.status === 'warning').length
+  }, [recentSteps.length])
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
@@ -87,17 +73,17 @@ const Recording: React.FC = () => {
     navigate('/record/done')
   }
 
+  const displaySteps = useMemo(() => {
+    return recentSteps.slice(-30)
+  }, [recentSteps])
+
   return (
     <div
-      style={{
-        width: '100%',
-        height: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        background: '#f0f2f5'
-      }}
+      className="page-container"
+      style={{ background: '#f0f2f5' }}
     >
       <div
+        className="titlebar-drag"
         style={{
           background: '#fff',
           padding: '16px 32px',
@@ -105,7 +91,8 @@ const Recording: React.FC = () => {
           alignItems: 'center',
           justifyContent: 'space-between',
           boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-          zIndex: 10
+          zIndex: 10,
+          flexShrink: 0,
         }}
       >
         <Space size={24} align="center">
@@ -120,16 +107,21 @@ const Recording: React.FC = () => {
 
         <Space size={16} align="center">
           <Tag color="blue" style={{ fontSize: 14, padding: '4px 12px' }}>
-            步骤: {steps.length}
+            步骤: {stepCount}
           </Tag>
           {errorCount > 0 && (
+            <Tag color="error" style={{ fontSize: 14, padding: '4px 12px' }}>
+              错误: {errorCount}
+            </Tag>
+          )}
+          {networkErrorCount > 0 && (
             <Tag color="warning" style={{ fontSize: 14, padding: '4px 12px' }}>
-              异常: {errorCount}
+              接口异常: {networkErrorCount}
             </Tag>
           )}
         </Space>
 
-        <Space size={12}>
+        <Space size={12} className="titlebar-no-drag">
           {isPaused ? (
             <Button
               type="primary"
@@ -167,7 +159,7 @@ const Recording: React.FC = () => {
         }}
       >
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
-          {steps.length === 0 && (
+          {stepCount === 0 && (
             <div
               style={{
                 textAlign: 'center',
@@ -180,20 +172,26 @@ const Recording: React.FC = () => {
             </div>
           )}
 
-          {steps.map((step, index) => (
+          {stepCount > recentSteps.length && (
+            <div style={{ textAlign: 'center', color: '#999', marginBottom: 16, fontSize: 12 }}>
+              显示最近 {recentSteps.length} 步（共 {stepCount} 步）
+            </div>
+          )}
+
+          {displaySteps.map((step) => (
             <div
               key={step.id}
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
-                marginBottom: 16,
+                marginBottom: 12,
                 position: 'relative'
               }}
             >
               <div
                 style={{
-                  width: 32,
-                  height: 32,
+                  width: 28,
+                  height: 28,
                   borderRadius: '50%',
                   background:
                     step.status === 'error'
@@ -205,20 +203,20 @@ const Recording: React.FC = () => {
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: '#fff',
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: 600,
                   flexShrink: 0,
-                  marginRight: 16
+                  marginRight: 12
                 }}
               >
-                {index + 1}
+                {step.index}
               </div>
               <div
                 style={{
                   flex: 1,
                   background: '#fff',
                   borderRadius: 8,
-                  padding: '12px 16px',
+                  padding: '10px 14px',
                   boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
                   borderLeft:
                     step.status === 'error'
@@ -234,12 +232,14 @@ const Recording: React.FC = () => {
                       color={stepTypeColors[step.type]}
                       style={{ margin: 0 }}
                     >
-                      {stepTypeLabels[step.type]}
+                      {STEP_TYPE_LABELS[step.type] || step.type}
                     </Tag>
-                    <Text>{step.target}</Text>
+                    <Text ellipsis style={{ maxWidth: 300 }}>
+                      {step.target?.text || step.target?.selector || ''}
+                    </Text>
                     {step.value && (
-                      <Text type="secondary" code>
-                        {step.value}
+                      <Text type="secondary" code style={{ fontSize: 12 }}>
+                        {step.value.length > 50 ? step.value.slice(0, 50) + '...' : step.value}
                       </Text>
                     )}
                   </Space>
@@ -253,20 +253,8 @@ const Recording: React.FC = () => {
                     {step.status === 'normal' && (
                       <CheckCircleOutlined style={{ color: '#52c41a' }} />
                     )}
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {new Date(step.timestamp).toLocaleTimeString('zh-CN')}
-                    </Text>
                   </Space>
                 </div>
-                {step.errors.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    {step.errors.map((err) => (
-                      <Text key={err.id} type="danger" style={{ fontSize: 12, display: 'block' }}>
-                        {err.message}
-                      </Text>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           ))}

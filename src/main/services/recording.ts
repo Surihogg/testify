@@ -3,10 +3,20 @@ import { BrowserWindow } from 'electron'
 import { playwrightService } from './playwright'
 import { IPC_CHANNELS } from '../../shared/ipc-channels'
 import type { RecordingConfig, RecordingSession, Step, StepType, NetworkLog, ConsoleLog, ErrorLog, StepTarget } from '../../shared/types'
+import path from 'path'
+import os from 'os'
+import { promises as fs } from 'fs'
+
+const MAX_RESPONSE_BODY_SIZE = 50 * 1024
+const MAX_CONSOLE_LOGS = 500
+const MAX_NETWORK_LOGS = 1000
+const SCROLL_THROTTLE_MS = 500
 
 const INIT_SCRIPT = `
 (function() {
   window.__testify_recording = true;
+  window.__testify_last_scroll = 0;
+  window.__testify_last_input = {};
 
   function generateSelector(el) {
     if (el.id) return '#' + CSS.escape(el.id);
@@ -83,7 +93,11 @@ const INIT_SCRIPT = `
   document.addEventListener('input', function(e) {
     if (!window.__testify_recording) return;
     const el = e.target;
-    notify({ type: 'input', target: getElementInfo(el), value: el.value || '', timestamp: Date.now() });
+    const key = el.selector || el.name || el.id || el.className;
+    const now = Date.now();
+    if (window.__testify_last_input[key] && now - window.__testify_last_input[key] < 300) return;
+    window.__testify_last_input[key] = now;
+    notify({ type: 'input', target: getElementInfo(el), value: el.value || '', timestamp: now });
   }, true);
 
   document.addEventListener('change', function(e) {
@@ -92,11 +106,6 @@ const INIT_SCRIPT = `
     if (el.tagName === 'SELECT') {
       notify({ type: 'select', target: getElementInfo(el), value: el.value || '', timestamp: Date.now() });
     }
-  }, true);
-
-  document.addEventListener('mouseover', function(e) {
-    if (!window.__testify_recording) return;
-    notify({ type: 'hover', target: getElementInfo(e.target), timestamp: Date.now() });
   }, true);
 
   document.addEventListener('keydown', function(e) {
@@ -108,7 +117,10 @@ const INIT_SCRIPT = `
 
   document.addEventListener('scroll', function() {
     if (!window.__testify_recording) return;
-    notify({ type: 'scroll', target: { selector: 'window', xpath: '', text: '', role: '', rect: { x: 0, y: 0, width: 0, height: 0 } }, value: JSON.stringify({ scrollX: window.scrollX, scrollY: window.scrollY }), timestamp: Date.now() });
+    var now = Date.now();
+    if (now - window.__testify_last_scroll < ${SCROLL_THROTTLE_MS}) return;
+    window.__testify_last_scroll = now;
+    notify({ type: 'scroll', target: { selector: 'window', xpath: '', text: '', role: '', rect: { x: 0, y: 0, width: 0, height: 0 } }, value: JSON.stringify({ scrollX: window.scrollX, scrollY: window.scrollY }), timestamp: now });
   }, true);
 
   window.addEventListener('popstate', function() {
@@ -122,6 +134,8 @@ class RecordingService {
   private session: RecordingSession | null = null
   private mainWindow: BrowserWindow | null = null
   private stepCounter = 0
+  private screenshotDir: string = ''
+  private pendingScreenshotCount = 0
 
   setMainWindow(win: BrowserWindow): void {
     this.mainWindow = win
@@ -129,6 +143,15 @@ class RecordingService {
 
   async startRecording(config: RecordingConfig): Promise<RecordingSession> {
     this.stepCounter = 0
+    this.pendingScreenshotCount = 0
+
+    this.screenshotDir = path.join(
+      config.localPath || os.tmpdir(),
+      'testify-temp',
+      `recording-${Date.now()}`,
+      'screenshots'
+    )
+    await fs.mkdir(this.screenshotDir, { recursive: true })
 
     let result
     if (config.connectionType === 'cdp' && config.cdpUrl) {
@@ -152,10 +175,9 @@ class RecordingService {
       errors: [],
     }
 
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
+    await context.tracing.start({ screenshots: true, snapshots: true })
 
     await page.addInitScript(INIT_SCRIPT)
-    await page.evaluate(INIT_SCRIPT)
 
     page.on('console', async (msg) => {
       const text = msg.text()
@@ -169,50 +191,64 @@ class RecordingService {
         return
       }
 
+      if (!this.session) return
+      if (this.session.consoleLogs.length >= MAX_CONSOLE_LOGS) {
+        this.session.consoleLogs.shift()
+      }
+
       const log: ConsoleLog = {
         id: randomUUID(),
         level: msg.type() as ConsoleLog['level'],
-        text,
+        text: text.slice(0, 2000),
         timestamp: Date.now(),
       }
-      if (this.session) {
-        this.session.consoleLogs.push(log)
-        this.sendToRenderer(IPC_CHANNELS.RECORDING_ON_CONSOLE, log)
-      }
+      this.session.consoleLogs.push(log)
     })
 
     page.on('pageerror', (error) => {
+      if (!this.session) return
       const errorLog: ErrorLog = {
         id: randomUUID(),
-        message: error.message,
-        stack: error.stack || '',
+        message: error.message.slice(0, 2000),
+        stack: (error.stack || '').slice(0, 4000),
         source: '',
         line: 0,
         column: 0,
         timestamp: Date.now(),
       }
-      if (this.session) {
-        this.session.errors.push(errorLog)
-        this.sendToRenderer(IPC_CHANNELS.RECORDING_ON_ERROR, errorLog)
-      }
+      this.session.errors.push(errorLog)
     })
 
     page.on('request', (request) => {
+      if (!this.session) return
+      if (this.session.networkLogs.length >= MAX_NETWORK_LOGS) {
+        this.session.networkLogs.shift()
+      }
+
+      const url = request.url()
+      if (url.startsWith('data:') || url.startsWith('blob:')) return
+
       const log: NetworkLog = {
         id: randomUUID(),
-        url: request.url(),
+        url,
         method: request.method(),
         status: 0,
-        requestHeaders: request.headers(),
-        requestBody: request.postData() || undefined,
+        requestHeaders: {},
+        requestBody: undefined,
         responseHeaders: {},
         timestamp: Date.now(),
         duration: 0,
         failed: false,
       }
-      if (this.session) {
-        this.session.networkLogs.push(log)
+
+      if (request.method() !== 'GET') {
+        const postData = request.postData()
+        if (postData && postData.length <= MAX_RESPONSE_BODY_SIZE) {
+          log.requestBody = postData
+        }
       }
+
+      this.session.networkLogs.push(log)
     })
 
     page.on('response', async (response) => {
@@ -223,15 +259,18 @@ class RecordingService {
       )
       if (existingLog) {
         existingLog.status = response.status()
-        existingLog.responseHeaders = response.headers()
         existingLog.failed = response.status() >= 400
         existingLog.duration = Date.now() - existingLog.timestamp
-        try {
-          existingLog.responseBody = await response.text()
-        } catch {
-          existingLog.responseBody = undefined
+
+        if (existingLog.failed) {
+          existingLog.responseHeaders = response.headers()
+          try {
+            const body = await response.text()
+            existingLog.responseBody = body.slice(0, MAX_RESPONSE_BODY_SIZE)
+          } catch {
+            // ignore
+          }
         }
-        this.sendToRenderer(IPC_CHANNELS.RECORDING_ON_NETWORK, existingLog)
       }
     })
 
@@ -247,11 +286,39 @@ class RecordingService {
       }
     })
 
+    context.on('page', async (newPage) => {
+      await newPage.addInitScript(INIT_SCRIPT)
+      try {
+        await newPage.waitForLoadState('domcontentloaded', { timeout: 5000 })
+      } catch {
+        // page may already be loaded
+      }
+      await newPage.evaluate(INIT_SCRIPT)
+      this.setupPageListeners(newPage)
+    })
+
     if (config.startUrl) {
       await page.goto(config.startUrl, { waitUntil: 'domcontentloaded' })
+      await page.evaluate(INIT_SCRIPT)
+    } else {
+      await page.evaluate(INIT_SCRIPT)
     }
 
     return this.session
+  }
+
+  private setupPageListeners(page: import('playwright').Page): void {
+    page.on('console', async (msg) => {
+      const text = msg.text()
+      if (text.startsWith('__TESTIFY_EVENT__')) {
+        try {
+          const eventData = JSON.parse(text.replace('__TESTIFY_EVENT__', ''))
+          await this.handleUserEvent(eventData)
+        } catch {
+          // ignore
+        }
+      }
+    })
   }
 
   private async handleUserEvent(eventData: { type: string; target: StepTarget; value?: string; timestamp: number }): Promise<void> {
@@ -275,17 +342,11 @@ class RecordingService {
       errors: [],
     }
 
-    try {
-      const screenshot = await page.screenshot({ type: 'png' })
-      step.screenshot = `data:image/png;base64,${screenshot.toString('base64')}`
-    } catch {
-      // screenshot failed, continue without it
-    }
+    this.saveScreenshotAsync(page, step.id, step.index)
 
     const recentNetworkLogs = this.session.networkLogs.filter(
       (l) => l.timestamp >= eventData.timestamp - 1000
     )
-    step.networkLogs = recentNetworkLogs
     if (recentNetworkLogs.some((l) => l.failed)) {
       step.status = 'warning'
     }
@@ -293,13 +354,43 @@ class RecordingService {
     const recentErrors = this.session.errors.filter(
       (e) => e.timestamp >= eventData.timestamp - 1000
     )
-    step.errors = recentErrors
     if (recentErrors.length > 0) {
       step.status = 'error'
     }
 
     this.session.steps.push(step)
-    this.sendToRenderer(IPC_CHANNELS.RECORDING_ON_STEP, step)
+
+    this.sendToRenderer(IPC_CHANNELS.RECORDING_ON_STEP, {
+      id: step.id,
+      index: step.index,
+      type: step.type,
+      target: step.target,
+      value: step.value,
+      timestamp: step.timestamp,
+      status: step.status,
+    })
+  }
+
+  private saveScreenshotAsync(page: import('playwright').Page, stepId: string, stepIndex: number): void {
+    if (this.pendingScreenshotCount > 5) return
+    this.pendingScreenshotCount++
+
+    page.screenshot({ type: 'jpeg', quality: 60 })
+      .then(async (buffer) => {
+        const filename = `step-${String(stepIndex).padStart(3, '0')}.jpg`
+        const filepath = path.join(this.screenshotDir, filename)
+        await fs.writeFile(filepath, buffer)
+        const step = this.session?.steps.find((s) => s.id === stepId)
+        if (step) {
+          step.screenshot = filepath
+        }
+      })
+      .catch(() => {
+        // screenshot failed
+      })
+      .finally(() => {
+        this.pendingScreenshotCount--
+      })
   }
 
   async pauseRecording(): Promise<void> {
@@ -323,8 +414,9 @@ class RecordingService {
     const context = playwrightService.getContext()
     if (context) {
       try {
-        const traceDir = this.session.config.localPath || require('os').tmpdir()
-        const tracePath = require('path').join(traceDir, 'traces', `${this.session.id}.zip`)
+        const traceDir = this.session.config.localPath || os.tmpdir()
+        const tracePath = path.join(traceDir, 'traces', `${this.session.id}.zip`)
+        await fs.mkdir(path.dirname(tracePath), { recursive: true })
         await context.tracing.stop({ path: tracePath })
         this.session.tracePath = tracePath
       } catch {
@@ -332,7 +424,7 @@ class RecordingService {
       }
     }
 
-    const session = { ...this.session }
+    const session = JSON.parse(JSON.stringify(this.session)) as RecordingSession
     this.session = null
     return session
   }

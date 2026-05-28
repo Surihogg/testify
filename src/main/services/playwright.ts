@@ -19,7 +19,12 @@ class PlaywrightService {
         viewport: null,
       })
       this.browser = this.context.browser()!
-      this.page = this.context.pages[0] || await this.context.newPage()
+      const existingPages = this.context.pages()
+      if (existingPages.length > 0) {
+        this.page = existingPages[0]
+      } else {
+        this.page = await this.context.newPage()
+      }
     } else {
       const launchOptions: Record<string, unknown> = { headless: false }
       if (type !== 'firefox' && type !== 'webkit') {
@@ -39,7 +44,11 @@ class PlaywrightService {
     const contexts = this.browser.contexts()
     this.context = contexts[0] || await this.browser.newContext()
     const pages = this.context.pages()
-    this.page = pages[0] || await this.context.newPage()
+    if (pages.length > 0) {
+      this.page = pages[0]
+    } else {
+      this.page = await this.context.newPage()
+    }
     return { browser: this.browser, context: this.context, page: this.page }
   }
 

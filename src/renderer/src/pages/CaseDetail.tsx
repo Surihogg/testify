@@ -1,24 +1,22 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Descriptions,
   Tabs,
   Table,
   Tag,
-  Badge,
   Button,
   Space,
   Radio,
   Select,
   Typography,
-  Drawer,
+  Modal,
   Form,
   Input,
   Switch,
-  Modal,
   message,
   Spin,
   Row,
-  Col
+  Col,
+  Empty
 } from 'antd'
 import {
   PlayCircleOutlined,
@@ -35,28 +33,10 @@ import {
 } from '@ant-design/icons'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useCasesStore } from '../stores/cases'
-import StepTimeline from '../components/StepTimeline'
-import ContextPanel from '../components/ContextPanel'
-import AssertionEditor from '../components/AssertionEditor'
-import type { Step, Assertion, CaseStatus, AssertionType } from '../../../shared/types'
+import type { Step, Assertion, AssertionType } from '../../../shared/types'
+import { STEP_TYPE_LABELS, ASSERTION_TYPE_LABELS, CASE_STATUS_LABELS, CASE_STATUS_COLORS } from '../../../shared/constants'
 
 const { Text, Title } = Typography
-
-const statusLabels: Record<CaseStatus, string> = {
-  draft: '草稿',
-  ready: '就绪',
-  passed: '通过',
-  failed: '失败',
-  flaky: '不稳定'
-}
-
-const statusColors: Record<CaseStatus, string> = {
-  draft: 'default',
-  ready: 'processing',
-  passed: 'success',
-  failed: 'error',
-  flaky: 'warning'
-}
 
 const CaseDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>()
@@ -83,7 +63,7 @@ const CaseDetail: React.FC = () => {
     )
   }
 
-  const currentStep = currentCase.steps[currentStepIndex] || null
+  const currentStep: Step | null = currentCase.steps[currentStepIndex] || null
 
   const handleAddAssertion = () => {
     setEditingAssertion(null)
@@ -95,7 +75,7 @@ const CaseDetail: React.FC = () => {
     setEditingAssertion(assertion)
     assertionForm.setFieldsValue({
       type: assertion.type,
-      stepId: assertion.stepId,
+      stepIndex: assertion.stepIndex,
       ...assertion.config
     })
     setAssertionModalOpen(true)
@@ -108,11 +88,11 @@ const CaseDetail: React.FC = () => {
   const handleSaveAssertion = async () => {
     try {
       const values = await assertionForm.validateFields()
-      const { type, stepId, ...config } = values
+      const { type, stepIndex, ...config } = values
       const assertion: Assertion = {
         id: editingAssertion?.id || Date.now().toString(),
+        stepIndex: stepIndex || 0,
         type,
-        stepId,
         config
       }
       if (editingAssertion) {
@@ -129,11 +109,14 @@ const CaseDetail: React.FC = () => {
 
   const handleStartReplay = async () => {
     if (!currentCase) return
+    message.loading({ content: '正在启动回放...', key: 'replay', duration: 0 })
     await startReplay({
       testCaseId: currentCase.id,
       type: replayType,
-      speed: replaySpeed
+      speed: replaySpeed,
+      browser: 'chrome',
     })
+    message.destroy('replay')
   }
 
   const networkColumns = [
@@ -152,7 +135,7 @@ const CaseDetail: React.FC = () => {
       width: 80,
       render: (status: number) => (
         <Tag color={status >= 400 ? 'error' : status >= 300 ? 'warning' : 'success'}>
-          {status}
+          {status || '...'}
         </Tag>
       )
     },
@@ -161,7 +144,7 @@ const CaseDetail: React.FC = () => {
       dataIndex: 'duration',
       key: 'duration',
       width: 80,
-      render: (d: number) => `${d}ms`
+      render: (d: number) => d ? `${d}ms` : '-'
     }
   ]
 
@@ -178,7 +161,8 @@ const CaseDetail: React.FC = () => {
         style={{
           padding: '16px 24px',
           background: '#fff',
-          borderBottom: '1px solid #f0f0f0'
+          borderBottom: '1px solid #f0f0f0',
+          flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -189,8 +173,8 @@ const CaseDetail: React.FC = () => {
             <Title level={4} style={{ margin: 0 }}>
               {currentCase.name}
             </Title>
-            <Tag color={statusColors[currentCase.status]}>
-              {statusLabels[currentCase.status]}
+            <Tag color={CASE_STATUS_COLORS[currentCase.status] || 'default'}>
+              {CASE_STATUS_LABELS[currentCase.status] || currentCase.status}
             </Tag>
             {currentCase.tags.map((tag) => (
               <Tag key={tag}>{tag}</Tag>
@@ -198,21 +182,46 @@ const CaseDetail: React.FC = () => {
           </Space>
           <Space size={16}>
             <Text type="secondary">
-              创建: {new Date(currentCase.createdAt).toLocaleString('zh-CN')}
-            </Text>
-            <Text type="secondary">
-              更新: {new Date(currentCase.updatedAt).toLocaleString('zh-CN')}
+              创建: {(() => { try { return new Date(currentCase.createdAt).toLocaleString('zh-CN') } catch { return currentCase.createdAt } })()}
             </Text>
           </Space>
         </div>
       </div>
 
-      <div style={{ padding: '16px 24px', background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
-        <StepTimeline
-          steps={currentCase.steps}
-          currentStepIndex={currentStepIndex}
-          onStepClick={setCurrentStepIndex}
-        />
+      <div style={{ padding: '12px 24px', background: '#fafafa', borderBottom: '1px solid #f0f0f0', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+          {currentCase.steps.map((step, idx) => (
+            <div
+              key={step.id}
+              onClick={() => setCurrentStepIndex(idx)}
+              style={{
+                minWidth: 120,
+                padding: '8px 12px',
+                background: idx === currentStepIndex ? '#fff' : '#f5f5f5',
+                border: idx === currentStepIndex ? '2px solid #667eea' : '1px solid #e8e8e8',
+                borderRadius: 6,
+                cursor: 'pointer',
+                flexShrink: 0,
+                borderLeft: step.status === 'error' ? '3px solid #ff4d4f' : step.status === 'warning' ? '3px solid #faad14' : undefined,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+                <Tag color={step.status === 'error' ? 'error' : step.status === 'warning' ? 'warning' : 'processing'} style={{ margin: 0, fontSize: 11 }}>
+                  {idx + 1}
+                </Tag>
+                <Text style={{ fontSize: 12 }}>
+                  {STEP_TYPE_LABELS[step.type] || step.type}
+                </Text>
+              </div>
+              <Text ellipsis style={{ fontSize: 11, color: '#666', display: 'block' }}>
+                {step.target?.text || step.target?.selector || '-'}
+              </Text>
+            </div>
+          ))}
+          {currentCase.steps.length === 0 && (
+            <Empty description="无步骤数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          )}
+        </div>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: '16px 24px' }}>
@@ -226,7 +235,7 @@ const CaseDetail: React.FC = () => {
               children: currentStep ? (
                 <Table
                   columns={networkColumns}
-                  dataSource={currentStep.networkRequests}
+                  dataSource={currentStep.networkLogs || []}
                   rowKey="id"
                   size="small"
                   pagination={false}
@@ -234,19 +243,28 @@ const CaseDetail: React.FC = () => {
                     expandedRowRender: (record) => (
                       <div style={{ padding: 12 }}>
                         <Row gutter={24}>
-                          <Col span={12}>
-                            <Text strong>请求头</Text>
-                            <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
-                              {JSON.stringify(record.requestHeaders, null, 2)}
-                            </pre>
-                          </Col>
-                          <Col span={12}>
-                            <Text strong>响应头</Text>
-                            <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
-                              {JSON.stringify(record.responseHeaders, null, 2)}
-                            </pre>
-                          </Col>
+                          {record.requestBody && (
+                            <Col span={12}>
+                              <Text strong>请求体</Text>
+                              <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
+                                {record.requestBody}
+                              </pre>
+                            </Col>
+                          )}
+                          {record.responseBody && (
+                            <Col span={12}>
+                              <Text strong>响应体</Text>
+                              <pre style={{ fontSize: 12, background: '#f5f5f5', padding: 8, borderRadius: 4, marginTop: 4, maxHeight: 200, overflow: 'auto' }}>
+                                {record.responseBody}
+                              </pre>
+                            </Col>
+                          )}
                         </Row>
+                        {record.error && (
+                          <div style={{ marginTop: 8 }}>
+                            <Text type="danger">错误: {record.error}</Text>
+                          </div>
+                        )}
                       </div>
                     )
                   }}
@@ -260,9 +278,9 @@ const CaseDetail: React.FC = () => {
               label: '控制台',
               icon: <BugOutlined />,
               children: currentStep ? (
-                currentStep.consoleMessages.length > 0 ? (
+                (currentStep.consoleLogs || []).length > 0 ? (
                   <div>
-                    {currentStep.consoleMessages.map((msg) => (
+                    {(currentStep.consoleLogs || []).map((msg) => (
                       <div
                         key={msg.id}
                         style={{
@@ -277,9 +295,6 @@ const CaseDetail: React.FC = () => {
                           {consoleLevelIcons[msg.level]}
                         </span>
                         <Text style={{ flex: 1 }}>{msg.text}</Text>
-                        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>
-                          {new Date(msg.timestamp).toLocaleTimeString('zh-CN')}
-                        </Text>
                       </div>
                     ))}
                   </div>
@@ -295,9 +310,9 @@ const CaseDetail: React.FC = () => {
               label: '错误',
               icon: <CloseCircleOutlined />,
               children: currentStep ? (
-                currentStep.errors.length > 0 ? (
+                (currentStep.errors || []).length > 0 ? (
                   <div>
-                    {currentStep.errors.map((err) => (
+                    {(currentStep.errors || []).map((err) => (
                       <div
                         key={err.id}
                         style={{
@@ -337,25 +352,20 @@ const CaseDetail: React.FC = () => {
               )
             },
             {
-              key: 'dom',
-              label: 'DOM 快照',
+              key: 'screenshot',
+              label: '截图',
               icon: <CameraOutlined />,
-              children: currentStep?.domSnapshot ? (
-                <pre
-                  style={{
-                    fontSize: 12,
-                    background: '#f5f5f5',
-                    padding: 16,
-                    borderRadius: 6,
-                    maxHeight: 400,
-                    overflow: 'auto'
-                  }}
-                >
-                  {currentStep.domSnapshot}
-                </pre>
+              children: currentStep?.screenshot ? (
+                <div style={{ textAlign: 'center' }}>
+                  <img
+                    src={currentStep.screenshot}
+                    alt={`步骤 ${currentStepIndex + 1}`}
+                    style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8, border: '1px solid #f0f0f0' }}
+                  />
+                </div>
               ) : (
                 <Text type="secondary">
-                  {currentStep ? '该步骤无 DOM 快照' : '请选择一个步骤查看 DOM 快照'}
+                  {currentStep ? '该步骤无截图' : '请选择一个步骤查看截图'}
                 </Text>
               )
             }
@@ -367,7 +377,10 @@ const CaseDetail: React.FC = () => {
         style={{
           padding: '16px 24px',
           background: '#fff',
-          borderTop: '1px solid #f0f0f0'
+          borderTop: '1px solid #f0f0f0',
+          flexShrink: 0,
+          maxHeight: 200,
+          overflow: 'auto',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -399,9 +412,9 @@ const CaseDetail: React.FC = () => {
                       marginBottom: 4
                     }}
                   >
-                    <Tag>{a.type}</Tag>
+                    <Tag>{ASSERTION_TYPE_LABELS[a.type] || a.type}</Tag>
                     <Text type="secondary" style={{ marginRight: 8 }}>
-                      步骤: {a.stepId}
+                      步骤: {a.stepIndex + 1}
                     </Text>
                     {a.result && (
                       <Tag color={a.result.passed ? 'success' : 'error'}>
@@ -495,21 +508,16 @@ const CaseDetail: React.FC = () => {
         <Form form={assertionForm} layout="vertical">
           <Form.Item label="断言类型" name="type" rules={[{ required: true }]}>
             <Select placeholder="选择断言类型">
-              <Select.Option value="text">文本断言</Select.Option>
-              <Select.Option value="visible">可见性断言</Select.Option>
-              <Select.Option value="attribute">属性断言</Select.Option>
-              <Select.Option value="url">URL 断言</Select.Option>
-              <Select.Option value="status">状态码断言</Select.Option>
-              <Select.Option value="count">计数断言</Select.Option>
-              <Select.Option value="value">值断言</Select.Option>
-              <Select.Option value="screenshot">截图对比断言</Select.Option>
+              {Object.entries(ASSERTION_TYPE_LABELS).map(([key, label]) => (
+                <Select.Option key={key} value={key}>{label}</Select.Option>
+              ))}
             </Select>
           </Form.Item>
-          <Form.Item label="步骤" name="stepId" rules={[{ required: true }]}>
+          <Form.Item label="步骤" name="stepIndex" rules={[{ required: true }]}>
             <Select placeholder="选择步骤">
               {currentCase.steps.map((step, idx) => (
-                <Select.Option key={step.id} value={step.id}>
-                  步骤 {idx + 1}: {step.target}
+                <Select.Option key={step.id} value={idx}>
+                  步骤 {idx + 1}: {STEP_TYPE_LABELS[step.type] || step.type} - {step.target?.text || step.target?.selector || ''}
                 </Select.Option>
               ))}
             </Select>
@@ -517,11 +525,8 @@ const CaseDetail: React.FC = () => {
           <Form.Item label="选择器" name="selector">
             <Input placeholder="CSS 选择器" />
           </Form.Item>
-          <Form.Item label="期望值" name="expected">
+          <Form.Item label="期望值" name="expectedText">
             <Input placeholder="期望值" />
-          </Form.Item>
-          <Form.Item label="是否启用" name="enabled" valuePropName="checked" initialValue={true}>
-            <Switch />
           </Form.Item>
         </Form>
       </Modal>

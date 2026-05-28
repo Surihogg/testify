@@ -12,7 +12,11 @@ class ReplayService {
     this.mainWindow = win
   }
 
-  async startReplay(config: ReplayConfig, testCase: TestCase): Promise<ReplayResult> {
+  async startReplay(config: ReplayConfig, testCase: TestCase): Promise<void> {
+    if (this.isReplaying) {
+      throw new Error('已有回放正在运行')
+    }
+
     this.isReplaying = true
     this.aborted = false
 
@@ -43,7 +47,6 @@ class ReplayService {
     this.isReplaying = false
 
     this.sendToRenderer(IPC_CHANNELS.REPLAY_ON_COMPLETE, result)
-    return result
   }
 
   private async functionalReplay(config: ReplayConfig, testCase: TestCase, result: ReplayResult): Promise<void> {
@@ -53,18 +56,24 @@ class ReplayService {
       const speed = config.speed || 1
       const stepDelay = Math.max(100, 1000 / speed)
 
+      if (testCase.metadata?.url) {
+        await page.goto(testCase.metadata.url, { waitUntil: 'domcontentloaded' })
+        await page.waitForTimeout(1000)
+      }
+
       for (const step of testCase.steps) {
         if (this.aborted) break
 
         try {
           await this.executeStep(page, step)
           result.passedSteps++
-          this.sendToRenderer(IPC_CHANNELS.REPLAY_ON_STEP, { stepId: step.id, status: 'passed' })
+          this.sendToRenderer(IPC_CHANNELS.REPLAY_ON_STEP, { stepId: step.id, index: step.index, status: 'passed' })
         } catch (error) {
           result.failedSteps++
           result.success = false
           this.sendToRenderer(IPC_CHANNELS.REPLAY_ON_STEP, {
             stepId: step.id,
+            index: step.index,
             status: 'failed',
             error: error instanceof Error ? error.message : String(error),
           })
@@ -81,6 +90,10 @@ class ReplayService {
           result.success = false
         }
         this.sendToRenderer(IPC_CHANNELS.REPLAY_ON_ASSERTION, assertionResult)
+      }
+
+      if (!this.aborted) {
+        await page.waitForTimeout(2000)
       }
     } finally {
       await playwrightService.closeBrowser()
@@ -99,7 +112,7 @@ class ReplayService {
   private async executeStep(page: import('playwright').Page, step: Step): Promise<void> {
     switch (step.type) {
       case 'navigate':
-        await page.goto(step.value || step.url || '', { waitUntil: 'domcontentloaded' })
+        await page.goto(step.value || step.url || '', { waitUntil: 'domcontentloaded', timeout: 10000 })
         break
       case 'click':
         await page.locator(step.target.selector).first().click({ timeout: 5000 })

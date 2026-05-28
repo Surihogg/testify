@@ -9,6 +9,8 @@ import Recording from './pages/Recording'
 import RecordDone from './pages/RecordDone'
 import CaseLibrary from './pages/CaseLibrary'
 import CaseDetail from './pages/CaseDetail'
+import ReplayCenter from './pages/ReplayCenter'
+import Settings from './pages/Settings'
 import Layout from './components/Layout'
 
 const App: React.FC = () => {
@@ -29,6 +31,8 @@ const App: React.FC = () => {
           <Route path="/manage" element={<Layout />}>
             <Route index element={<CaseLibrary />} />
             <Route path="case/:id" element={<CaseDetail />} />
+            <Route path="replay" element={<ReplayCenter />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
         </Routes>
       </HashRouter>

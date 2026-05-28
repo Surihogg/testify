@@ -153,8 +153,8 @@ export function registerIpcHandlers(mainWindow: Electron.BrowserWindow): void {
       if (!testCase) {
         return { success: false, error: '用例不存在' }
       }
-      const result = await replayService.startReplay(config, testCase)
-      return { success: true, data: result }
+      replayService.startReplay(config, testCase)
+      return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) }
     }

@@ -29,11 +29,12 @@ const RecordSetup: React.FC = () => {
     settings.defaultStorageType
   )
   const [cdpChecking, setCdpChecking] = useState(false)
+  const [cdpAvailable, setCdpAvailable] = useState<boolean | null>(null)
 
   const handleOpenFolder = async (field: string) => {
-    const path = await window.api.dialog.openFolder()
-    if (path) {
-      form.setFieldValue(field, path)
+    const result = await window.api.dialog.openFolder()
+    if (result.success && result.data) {
+      form.setFieldValue(field, result.data)
     }
   }
 
@@ -45,13 +46,16 @@ const RecordSetup: React.FC = () => {
     }
     setCdpChecking(true)
     try {
-      const result = await window.api.cdp.check(url)
-      if (result.ok) {
+      const result = await window.api.browser.checkCdp(url)
+      if (result.success && result.data) {
+        setCdpAvailable(true)
         message.success('连接成功')
       } else {
-        message.error(result.message || '连接失败')
+        setCdpAvailable(false)
+        message.error('无法连接，请确认浏览器已启动调试端口')
       }
     } catch {
+      setCdpAvailable(false)
       message.error('连接失败')
     } finally {
       setCdpChecking(false)
@@ -61,7 +65,18 @@ const RecordSetup: React.FC = () => {
   const handleStart = async () => {
     try {
       const values = await form.validateFields()
-      setConfig(values)
+      const config = {
+        browser: values.browser as BrowserType,
+        connectionType: values.connectionType as ConnectionType,
+        cdpUrl: values.cdpUrl,
+        startUrl: values.startUrl,
+        storageType: values.storageType as StorageType,
+        localPath: values.localPath || settings.defaultLocalPath,
+        gitUrl: values.gitUrl,
+        gitBranch: values.gitBranch || 'main',
+        gitLocalPath: values.gitLocalPath,
+      }
+      setConfig(config)
       navigate('/record/recording')
     } catch {
       message.warning('请填写必要配置')
@@ -72,16 +87,23 @@ const RecordSetup: React.FC = () => {
     <div
       style={{
         width: '100%',
-        height: '100vh',
+        height: '100%',
         background: '#f5f5f5',
-        overflow: 'auto'
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
       }}
     >
+      <div className="titlebar-drag" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 40, zIndex: 1 }} />
       <div
         style={{
           maxWidth: 640,
           margin: '0 auto',
-          padding: '40px 24px'
+          padding: '48px 24px 24px',
+          width: '100%',
+          flex: 1,
+          overflow: 'auto',
         }}
       >
         <Button
@@ -104,7 +126,9 @@ const RecordSetup: React.FC = () => {
             browser: settings.defaultBrowser,
             connectionType: settings.defaultConnectionType,
             storageType: settings.defaultStorageType,
-            cdpUrl: 'http://localhost:9222'
+            localPath: settings.defaultLocalPath,
+            cdpUrl: 'http://localhost:9222',
+            startUrl: '',
           }}
         >
           <Form.Item label="浏览器选择" name="browser" rules={[{ required: true }]}>

@@ -11,9 +11,12 @@ interface CasesStore {
   selectCase: (id: string) => Promise<void>
   saveCase: (testCase: TestCase) => Promise<boolean>
   deleteCase: (id: string) => Promise<boolean>
-  startReplay: (config: ReplayConfig) => Promise<void>
+  startReplay: (config: ReplayConfig) => Promise<boolean>
   stopReplay: () => Promise<void>
+  setReplayResult: (result: ReplayResult) => void
 }
+
+let replayListenersSetup = false
 
 export const useCasesStore = create<CasesStore>((set, get) => ({
   cases: [],
@@ -21,6 +24,7 @@ export const useCasesStore = create<CasesStore>((set, get) => ({
   replayResult: null,
   isReplaying: false,
   loading: false,
+
   loadCases: async () => {
     set({ loading: true })
     try {
@@ -30,6 +34,7 @@ export const useCasesStore = create<CasesStore>((set, get) => ({
       set({ cases: [], loading: false })
     }
   },
+
   selectCase: async (id) => {
     try {
       const result = await window.api.case.get(id)
@@ -38,6 +43,7 @@ export const useCasesStore = create<CasesStore>((set, get) => ({
       set({ currentCase: null })
     }
   },
+
   saveCase: async (testCase) => {
     const result = await window.api.case.save(testCase)
     if (result.success) {
@@ -46,6 +52,7 @@ export const useCasesStore = create<CasesStore>((set, get) => ({
     }
     return false
   },
+
   deleteCase: async (id) => {
     const result = await window.api.case.delete(id)
     if (result.success) {
@@ -54,22 +61,31 @@ export const useCasesStore = create<CasesStore>((set, get) => ({
     }
     return false
   },
+
   startReplay: async (config) => {
+    if (!replayListenersSetup) {
+      window.api.replay.onComplete((result) => {
+        set({ replayResult: result as ReplayResult, isReplaying: false })
+      })
+      replayListenersSetup = true
+    }
+
     set({ isReplaying: true, replayResult: null })
 
-    window.api.replay.onComplete((result) => {
-      set({ replayResult: result as ReplayResult, isReplaying: false })
-    })
-
     const result = await window.api.replay.start(config)
-    if (result.success && result.data) {
-      set({ replayResult: result.data, isReplaying: false })
-    } else {
+    if (!result.success) {
       set({ isReplaying: false })
+      return false
     }
+    return true
   },
+
   stopReplay: async () => {
     await window.api.replay.stop()
     set({ isReplaying: false })
+  },
+
+  setReplayResult: (result) => {
+    set({ replayResult: result, isReplaying: false })
   },
 }))

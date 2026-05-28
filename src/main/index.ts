@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
+let ipcRegistered = false
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -37,7 +38,10 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  registerIpcHandlers(mainWindow)
+  if (!ipcRegistered) {
+    registerIpcHandlers(mainWindow)
+    ipcRegistered = true
+  }
 }
 
 app.whenReady().then(() => {
